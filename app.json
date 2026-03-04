@@ -22,7 +22,11 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.y3vq3cz.calorietracker"
     },
     "plugins": [
       "expo-router",
@@ -33,10 +37,25 @@
           "cameraPermission": "Allow Calorie Tracker to use your camera for meal analysis."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ef4f2d3c-e858-45f9-8975-91be32927d87"
+      }
     }
   }
 }
