@@ -9,14 +9,17 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start:clear": "expo start -c",
+    "eas:build:preview:apk": "npx eas-cli build --platform android --profile preview",
+    "eas:build:preview:apk:ci": "npx eas-cli build --platform android --profile preview --non-interactive"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@react-navigation/bottom-tabs": "^7.15.5",
+    "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/native": "^7.1.6",
-    "@react-navigation/native-stack": "^7.14.4",
+    "@react-navigation/native-stack": "^7.3.16",
     "@supabase/supabase-js": "^2.98.0",
     "@tanstack/react-query": "^5.83.0",
     "expo": "^54.0.33",
@@ -28,6 +31,7 @@
     "expo-status-bar": "~3.0.9",
     "is-arrayish": "^0.3.4",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5.6.2",
     "react-native-screens": "~4.16.0",
