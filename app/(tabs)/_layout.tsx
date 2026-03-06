@@ -2,12 +2,14 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "@/providers/AuthProvider";
+import { isOnboardingComplete, useProfile } from "@/hooks/useProfile";
 import { colors, radius, shadow } from "@/theme/tokens";
 
 export default function TabsLayout() {
   const { user, loading } = useAuth();
+  const { data: profile, isLoading: profileLoading } = useProfile();
 
-  if (loading) {
+  if (loading || (user && profileLoading)) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator color={colors.primary} />
@@ -17,6 +19,10 @@ export default function TabsLayout() {
 
   if (!user) {
     return <Redirect href="/(auth)/sign-in" />;
+  }
+
+  if (!isOnboardingComplete(profile)) {
+    return <Redirect href={"/onboarding" as never} />;
   }
 
   return (

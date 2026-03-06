@@ -10,6 +10,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
+    "test:integration": "tsx --test tests/integration/*.test.ts",
+    "test": "npm run typecheck && npm run test:integration",
     "start:clear": "expo start -c",
     "eas:build:preview:apk": "npx eas-cli build --platform android --profile preview",
     "eas:build:preview:apk:ci": "npx eas-cli build --platform android --profile preview --non-interactive"
@@ -41,6 +43,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
+    "tsx": "^4.21.0",
     "typescript": "~5.9.2"
   }
 }

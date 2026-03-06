@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { getExpectedWeeklyWeightChange } from "@/lib/calorieTarget";
 import {
   addDays,
   eachDayOfInterval,
@@ -10,7 +11,10 @@ import {
   parseDateKey,
   subDays
 } from "@/lib/date";
+import { calculateGoalEta, calculateMovingAverage } from "@/lib/nutritionInsights";
 import { useDeleteMeal, useMealsByDate, useMealsByRange } from "@/hooks/useMeals";
+import { useProfile } from "@/hooks/useProfile";
+import { useWeightCheckins } from "@/hooks/useWeights";
 import { captureClientError } from "@/lib/monitoring";
 import { AppScreen } from "@/components/layout/AppScreen";
 import { AppCard } from "@/components/ui/AppCard";
@@ -22,12 +26,16 @@ export default function HistoryScreen() {
 
   const [selectedDateKey, setSelectedDateKey] = useState(todayKey);
   const selectedDate = parseDateKey(selectedDateKey);
+  const { data: profile } = useProfile();
 
   const { data: meals = [], isLoading } = useMealsByDate(selectedDateKey);
 
   const trendStart = subDays(selectedDate, 13);
   const trendStartKey = formatDateKey(trendStart);
   const { data: rangeMeals = [], isLoading: trendLoading } = useMealsByRange(trendStartKey, selectedDateKey);
+  const weightTrendStart = subDays(selectedDate, 29);
+  const weightTrendStartKey = formatDateKey(weightTrendStart);
+  const { data: weightCheckins = [], isLoading: weightLoading } = useWeightCheckins(weightTrendStartKey, selectedDateKey);
 
   const deleteMeal = useDeleteMeal();
 
@@ -58,6 +66,26 @@ export default function HistoryScreen() {
   }, [rangeMeals, trendStart, selectedDate]);
 
   const maxTrendCalories = Math.max(...trendData.map((entry) => entry.calories), 1);
+  const weightTrendData = useMemo(
+    () =>
+      calculateMovingAverage(
+        weightCheckins.map((entry) => ({
+          date: entry.date,
+          weightKg: entry.weight_kg
+        })),
+        7
+      ),
+    [weightCheckins]
+  );
+  const latestWeight = weightTrendData[weightTrendData.length - 1]?.value ?? profile?.weight_kg ?? null;
+  const expectedWeeklyChange =
+    profile?.goal && profile?.target_pace ? getExpectedWeeklyWeightChange(profile.goal, profile.target_pace) : 0;
+  const goalEta =
+    latestWeight && profile?.target_weight_kg
+      ? calculateGoalEta(latestWeight, profile.target_weight_kg, expectedWeeklyChange)
+      : "Set goal weight in profile";
+  const minWeight = Math.min(...weightTrendData.map((entry) => entry.value), latestWeight ?? 0);
+  const maxWeight = Math.max(...weightTrendData.map((entry) => entry.value), latestWeight ?? 1);
 
   const handleDeleteMeal = (mealId: string) => {
     Alert.alert("Delete meal", "This action cannot be undone.", [
@@ -155,6 +183,40 @@ export default function HistoryScreen() {
               );
             })}
           </View>
+        )}
+      </AppCard>
+
+      <AppCard style={{ marginBottom: 12 }}>
+        <Text style={styles.sectionHeading}>Weight trend (7-day avg)</Text>
+        <Text style={styles.rangeText}>
+          {latestWeight ? `Current avg: ${latestWeight.toFixed(1)} kg` : "Add weigh-ins to unlock trend."}
+        </Text>
+        <Text style={styles.rangeText}>
+          Goal ETA: {goalEta}
+          {profile?.target_weight_kg ? ` (target ${profile.target_weight_kg} kg)` : ""}
+        </Text>
+
+        {weightLoading ? (
+          <View style={{ height: 120, justifyContent: "center", alignItems: "center" }}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        ) : weightTrendData.length ? (
+          <View style={[styles.chartRow, { height: 120 }]}>
+            {weightTrendData.slice(-14).map((entry) => {
+              const spread = Math.max(maxWeight - minWeight, 0.1);
+              const normalized = (entry.value - minWeight) / spread;
+              const barHeight = 16 + normalized * 84;
+
+              return (
+                <View key={entry.date} style={styles.chartColumn}>
+                  <View style={[styles.chartBar, { height: barHeight, backgroundColor: "#6366f1" }]} />
+                  <Text style={styles.chartLabel}>{entry.date.slice(8)}</Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={styles.rangeText}>No weigh-ins yet. Add your current weight in Profile.</Text>
         )}
       </AppCard>
 

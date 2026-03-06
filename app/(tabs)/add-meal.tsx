@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,8 +15,20 @@ import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, router } from "expo-router";
 import { captureClientError } from "@/lib/monitoring";
 import { formatDateKey } from "@/lib/date";
+import { handleCalorieTarget } from "@/lib/calorieTarget";
 import { getSupabaseClient } from "@/lib/supabase";
-import { useCreateMeal } from "@/hooks/useMeals";
+import {
+  useCreateMealTemplate,
+  useCustomFoods,
+  useLookupFoodByBarcode,
+  useMealTemplates,
+  useRecentFoods,
+  useTouchMealTemplate,
+  useUpsertCustomFood
+} from "@/hooks/useFoods";
+import { enqueueOfflineMealLog, isLikelyOfflineError } from "@/hooks/useOfflineMealQueue";
+import { useCreateMeal, useMealsByDate } from "@/hooks/useMeals";
+import { useProfile } from "@/hooks/useProfile";
 import type { AnalyzeFoodResponse, MealItem, MealType } from "@/shared/schemas";
 import { analyzeFoodResponseSchema } from "@/shared/schemas";
 import { AppScreen } from "@/components/layout/AppScreen";
@@ -45,9 +57,24 @@ function parseNumber(input: string) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function createClientRequestId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function AddMealScreen() {
   const { type } = useLocalSearchParams<{ type?: string }>();
   const createMeal = useCreateMeal();
+  const { data: profile } = useProfile();
+  const todayKey = formatDateKey(new Date());
+  const { data: todayMeals = [] } = useMealsByDate(todayKey);
+  const { data: recentFoods = [] } = useRecentFoods(8);
+  const [customFoodSearch, setCustomFoodSearch] = useState("");
+  const { data: customFoods = [] } = useCustomFoods(customFoodSearch);
+  const { data: mealTemplates = [] } = useMealTemplates();
+  const saveCustomFood = useUpsertCustomFood();
+  const createTemplate = useCreateMealTemplate();
+  const touchTemplate = useTouchMealTemplate();
+  const lookupFoodByBarcode = useLookupFoodByBarcode();
 
   const [mealType, setMealType] = useState<MealType>("breakfast");
   const [description, setDescription] = useState("");
@@ -60,6 +87,10 @@ export default function AddMealScreen() {
   const [manualProtein, setManualProtein] = useState("");
   const [manualCarbs, setManualCarbs] = useState("");
   const [manualFat, setManualFat] = useState("");
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const saveLockRef = useRef(false);
+  const saveRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof type === "string" && isMealType(type)) {
@@ -70,6 +101,10 @@ export default function AddMealScreen() {
   const totalCalories = useMemo(
     () => items.reduce((sum, item) => sum + (Number.isFinite(item.calories) ? item.calories : 0), 0),
     [items]
+  );
+  const currentCalories = useMemo(
+    () => todayMeals.reduce((sum, meal) => sum + (Number.isFinite(meal.total_calories ?? NaN) ? meal.total_calories ?? 0 : 0), 0),
+    [todayMeals]
   );
 
   const addManualItem = () => {
@@ -98,12 +133,141 @@ export default function AddMealScreen() {
     setManualFat("");
   };
 
+  const addItemFromPreset = (item: { food_name: string; serving_size: string; calories: number; protein: number; carbs: number; fat: number }) => {
+    setItems((previous) => [
+      ...previous,
+      {
+        food_name: item.food_name,
+        quantity: 1,
+        serving_size: item.serving_size,
+        calories: item.calories,
+        protein: item.protein,
+        carbs: item.carbs,
+        fat: item.fat
+      }
+    ]);
+  };
+
+  const saveManualAsCustomFood = async () => {
+    if (!manualName.trim()) {
+      Alert.alert("Missing name", "Enter a food name first.");
+      return;
+    }
+
+    try {
+      await saveCustomFood.mutateAsync({
+        name: manualName.trim(),
+        barcode: barcodeInput.trim() || null,
+        servingSize: "1 serving",
+        calories: parseNumber(manualCalories),
+        protein: parseNumber(manualProtein),
+        carbs: parseNumber(manualCarbs),
+        fat: parseNumber(manualFat)
+      });
+      Alert.alert("Saved", "Custom food saved.");
+    } catch (error) {
+      void captureClientError(error, { screen: "add-meal", action: "save-custom-food" });
+      Alert.alert("Save failed", error instanceof Error ? error.message : "Could not save custom food");
+    }
+  };
+
+  const saveCurrentAsTemplate = async () => {
+    if (!items.length) {
+      Alert.alert("No items", "Add items before saving a template.");
+      return;
+    }
+
+    if (!templateName.trim()) {
+      Alert.alert("Template name required", "Enter a template name.");
+      return;
+    }
+
+    try {
+      await createTemplate.mutateAsync({
+        name: templateName.trim(),
+        mealType,
+        items
+      });
+      setTemplateName("");
+      Alert.alert("Template saved", "You can reuse it from the quick templates section.");
+    } catch (error) {
+      void captureClientError(error, { screen: "add-meal", action: "save-template" });
+      Alert.alert("Template save failed", error instanceof Error ? error.message : "Could not save template");
+    }
+  };
+
+  const applyTemplate = async (templateId: string) => {
+    const template = mealTemplates.find((entry) => entry.id === templateId);
+    if (!template?.meal_template_items?.length) return;
+
+    const nextItems = template.meal_template_items
+      .sort((a, b) => a.client_item_index - b.client_item_index)
+      .map((item) => ({
+        food_name: item.food_name,
+        quantity: item.quantity,
+        serving_size: item.serving_size,
+        calories: item.calories,
+        protein: item.protein,
+        carbs: item.carbs,
+        fat: item.fat
+      }));
+
+    setItems((previous) => [...previous, ...nextItems]);
+    try {
+      await touchTemplate.mutateAsync(template.id);
+    } catch {
+      // Best-effort metadata update only.
+    }
+  };
+
+  const addFoodByBarcode = async () => {
+    if (!barcodeInput.trim()) {
+      Alert.alert("Barcode required", "Enter a barcode value.");
+      return;
+    }
+
+    try {
+      const food = await lookupFoodByBarcode.mutateAsync(barcodeInput.trim());
+      if (!food) {
+        Alert.alert("Not found", "No custom food with that barcode. Save one first.");
+        return;
+      }
+
+      addItemFromPreset({
+        food_name: food.name,
+        serving_size: food.serving_size,
+        calories: food.calories,
+        protein: food.protein,
+        carbs: food.carbs,
+        fat: food.fat
+      });
+      Alert.alert("Added", `${food.name} added to meal items.`);
+    } catch (error) {
+      void captureClientError(error, { screen: "add-meal", action: "barcode-lookup" });
+      Alert.alert("Lookup failed", error instanceof Error ? error.message : "Could not lookup barcode");
+    }
+  };
+
   const updateItem = (index: number, patch: Partial<MealItem>) => {
     setItems((previous) => previous.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   };
 
   const removeItem = (index: number) => {
     setItems((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const resetFormAfterSave = () => {
+    setDescription("");
+    setPreviewUri(null);
+    setItems([]);
+    setManualName("");
+    setManualCalories("");
+    setManualProtein("");
+    setManualCarbs("");
+    setManualFat("");
+    setBarcodeInput("");
+    setTemplateName("");
+    saveRequestIdRef.current = null;
   };
 
   const analyzeAsset = async (asset: ImagePicker.ImagePickerAsset) => {
@@ -191,6 +355,12 @@ export default function AddMealScreen() {
           throw new Error("AI provider is busy right now. Please retry in a minute.");
         }
 
+        if (backendCode === "provider_data_policy_blocked") {
+          throw new Error(
+            "AI provider blocked by OpenRouter privacy policy. Update OpenRouter Privacy settings or switch to a compatible paid model."
+          );
+        }
+
         if (status === 413) {
           throw new Error("Image is too large. Use a smaller/cropped image and retry.");
         }
@@ -252,23 +422,57 @@ export default function AddMealScreen() {
   };
 
   const saveMeal = async () => {
+    if (saveLockRef.current || createMeal.isPending) {
+      return;
+    }
+
     if (!items.length) {
       Alert.alert("No items", "Add at least one food item.");
       return;
     }
 
+    saveLockRef.current = true;
+    const requestId = saveRequestIdRef.current ?? createClientRequestId();
+    saveRequestIdRef.current = requestId;
+
     try {
       await createMeal.mutateAsync({
         mealType,
         items,
-        date: formatDateKey(new Date())
+        date: todayKey,
+        requestId
       });
 
-      Alert.alert("Meal saved", "Your meal has been logged.");
+      resetFormAfterSave();
+      const dailyGoal = profile?.daily_calorie_goal ?? 2000;
+      const nextCalories = currentCalories + totalCalories;
+      const targetStatus = handleCalorieTarget(currentCalories, nextCalories, dailyGoal);
+
+      if (targetStatus === "just_met") {
+        Alert.alert("Meal saved", "Your meal has been logged. Target reached for today.");
+      } else if (targetStatus === "over") {
+        Alert.alert("Meal saved", `Your meal has been logged. You are ${Math.round(nextCalories - dailyGoal)} kcal over today.`);
+      } else {
+        Alert.alert("Meal saved", "Your meal has been logged.");
+      }
       router.replace("/(tabs)/dashboard");
     } catch (error) {
       void captureClientError(error, { screen: "add-meal", phase: "save" });
-      Alert.alert("Save failed", error instanceof Error ? error.message : "Could not save meal");
+      if (isLikelyOfflineError(error)) {
+        await enqueueOfflineMealLog({
+          mealType,
+          items,
+          date: todayKey,
+          requestId
+        });
+        resetFormAfterSave();
+        Alert.alert("Saved offline", "Meal queued locally and will retry automatically when connection returns.");
+        router.replace("/(tabs)/dashboard");
+      } else {
+        Alert.alert("Save failed", error instanceof Error ? error.message : "Could not save meal");
+      }
+    } finally {
+      saveLockRef.current = false;
     }
   };
 
@@ -289,6 +493,102 @@ export default function AddMealScreen() {
             </Pressable>
           ))}
         </View>
+      </AppCard>
+
+      <AppCard style={{ marginBottom: 10 }}>
+        <Text style={styles.sectionHeading}>Quick add: recent foods</Text>
+        {recentFoods.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {recentFoods.map((food) => (
+              <Pressable
+                key={food.id}
+                onPress={() =>
+                  addItemFromPreset({
+                    food_name: food.food_name,
+                    serving_size: food.serving_size,
+                    calories: food.calories,
+                    protein: food.protein,
+                    carbs: food.carbs,
+                    fat: food.fat
+                  })
+                }
+                style={styles.quickFoodChip}
+              >
+                <Text style={styles.quickFoodName}>{food.food_name}</Text>
+                <Text style={styles.quickFoodMeta}>{food.calories} kcal</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        ) : (
+          <Text style={styles.helpText}>Your recent foods appear here after the first logs.</Text>
+        )}
+      </AppCard>
+
+      <AppCard style={{ marginBottom: 10 }}>
+        <Text style={styles.sectionHeading}>Barcode scan / lookup</Text>
+        <TextInput
+          value={barcodeInput}
+          onChangeText={setBarcodeInput}
+          placeholder="Enter barcode number"
+          placeholderTextColor="#8ea0ba"
+          style={styles.manualNameInput}
+        />
+        <AppButton
+          label={lookupFoodByBarcode.isPending ? "Looking up..." : "Add from barcode"}
+          onPress={addFoodByBarcode}
+          disabled={lookupFoodByBarcode.isPending}
+          variant="outline"
+          style={{ marginTop: 8 }}
+        />
+      </AppCard>
+
+      <AppCard style={{ marginBottom: 10 }}>
+        <Text style={styles.sectionHeading}>Custom foods</Text>
+        <TextInput
+          value={customFoodSearch}
+          onChangeText={setCustomFoodSearch}
+          placeholder="Search custom food"
+          placeholderTextColor="#8ea0ba"
+          style={styles.manualNameInput}
+        />
+        <View style={{ marginTop: 8 }}>
+          {customFoods.slice(0, 6).map((food) => (
+            <Pressable
+              key={food.id}
+              onPress={() =>
+                addItemFromPreset({
+                  food_name: food.name,
+                  serving_size: food.serving_size,
+                  calories: food.calories,
+                  protein: food.protein,
+                  carbs: food.carbs,
+                  fat: food.fat
+                })
+              }
+              style={styles.quickRow}
+            >
+              <Text style={styles.quickFoodName}>{food.name}</Text>
+              <Text style={styles.quickFoodMeta}>{food.calories} kcal</Text>
+            </Pressable>
+          ))}
+          {!customFoods.length ? <Text style={styles.helpText}>No custom foods yet.</Text> : null}
+        </View>
+      </AppCard>
+
+      <AppCard style={{ marginBottom: 10 }}>
+        <Text style={styles.sectionHeading}>Meal templates</Text>
+        {mealTemplates.length ? (
+          mealTemplates.slice(0, 6).map((template) => (
+            <Pressable key={template.id} onPress={() => void applyTemplate(template.id)} style={styles.quickRow}>
+              <Text style={styles.quickFoodName}>{template.name}</Text>
+              <Text style={styles.quickFoodMeta}>
+                {template.meal_template_items?.length ?? 0} item{(template.meal_template_items?.length ?? 0) === 1 ? "" : "s"}
+              </Text>
+            </Pressable>
+          ))
+        ) : (
+          <Text style={styles.helpText}>Save a meal as template to reuse it quickly.</Text>
+        )}
       </AppCard>
 
       <AppCard style={{ marginBottom: 10 }}>
@@ -401,7 +701,34 @@ export default function AddMealScreen() {
           <ManualInput label="Fat" value={manualFat} onChange={setManualFat} isLast />
         </View>
 
-        <AppButton label="Add item" onPress={addManualItem} variant="outline" />
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <AppButton label="Add item" onPress={addManualItem} variant="outline" style={{ flex: 1 }} />
+          <AppButton
+            label={saveCustomFood.isPending ? "Saving..." : "Save custom"}
+            onPress={() => void saveManualAsCustomFood()}
+            variant="outline"
+            disabled={saveCustomFood.isPending}
+            style={{ flex: 1 }}
+          />
+        </View>
+      </AppCard>
+
+      <AppCard style={{ marginBottom: 12 }}>
+        <Text style={styles.sectionHeading}>Save as template</Text>
+        <TextInput
+          value={templateName}
+          onChangeText={setTemplateName}
+          placeholder="Template name"
+          placeholderTextColor="#8ea0ba"
+          style={styles.manualNameInput}
+        />
+        <AppButton
+          label={createTemplate.isPending ? "Saving template..." : "Save current items as template"}
+          onPress={() => void saveCurrentAsTemplate()}
+          disabled={createTemplate.isPending}
+          variant="outline"
+          style={{ marginTop: 8 }}
+        />
       </AppCard>
 
       <AppButton label={createMeal.isPending ? "Saving..." : "Save meal"} onPress={saveMeal} disabled={createMeal.isPending || !items.length} />
@@ -603,5 +930,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     backgroundColor: "#f8fbff",
     color: colors.text
+  },
+  quickFoodChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f8fbff",
+    borderRadius: radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginRight: 8
+  },
+  quickFoodName: {
+    color: colors.text,
+    fontWeight: "700",
+    fontSize: 12
+  },
+  quickFoodMeta: {
+    color: colors.mutedText,
+    fontSize: 11,
+    marginTop: 2
+  },
+  quickRow: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginBottom: 6,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#f8fbff"
   }
 });

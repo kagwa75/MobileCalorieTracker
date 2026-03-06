@@ -3,6 +3,7 @@ import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-nativ
 import { Link, Redirect, router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { captureClientError } from "@/lib/monitoring";
+import { validateAuthInput } from "@/lib/flowValidation";
 import { useAuth } from "@/providers/AuthProvider";
 import { AppScreen } from "@/components/layout/AppScreen";
 import { AppButton } from "@/components/ui/AppButton";
@@ -16,13 +17,14 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false);
 
   if (user) {
-    return <Redirect href="/(tabs)/dashboard" />;
+    return <Redirect href="/" />;
   }
 
   const onSignIn = async () => {
     const normalizedEmail = email.trim();
-    if (!normalizedEmail || !password) {
-      Alert.alert("Missing fields", "Enter both email and password.");
+    const validationError = validateAuthInput({ email: normalizedEmail, password, mode: "sign_in" });
+    if (validationError) {
+      Alert.alert("Invalid input", validationError);
       return;
     }
 
@@ -30,7 +32,7 @@ export default function SignInScreen() {
     try {
       const { error } = await signIn(normalizedEmail, password);
       if (error) throw error;
-      router.replace("/(tabs)/dashboard");
+      router.replace("/");
     } catch (error) {
       void captureClientError(error, { screen: "sign-in" });
       Alert.alert("Sign in failed", error instanceof Error ? error.message : "Please try again");

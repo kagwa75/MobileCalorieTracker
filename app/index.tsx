@@ -1,13 +1,15 @@
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Redirect } from "expo-router";
 import { useAuth } from "@/providers/AuthProvider";
+import { isOnboardingComplete, useProfile } from "@/hooks/useProfile";
 import { AppScreen } from "@/components/layout/AppScreen";
 import { colors } from "@/theme/tokens";
 
 export default function Index() {
   const { user, loading } = useAuth();
+  const { data: profile, isLoading: profileLoading } = useProfile();
 
-  if (loading) {
+  if (loading || (user && profileLoading)) {
     return (
       <AppScreen scroll={false}>
         <View style={styles.center}>
@@ -19,6 +21,7 @@ export default function Index() {
   }
 
   if (!user) return <Redirect href="/(auth)/sign-in" />;
+  if (!isOnboardingComplete(profile)) return <Redirect href={"/onboarding" as never} />;
   return <Redirect href="/(tabs)/dashboard" />;
 }
 

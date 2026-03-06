@@ -25,6 +25,15 @@ const aiResponseSchema = z
   })
   .strict();
 
+type OpenRouterChoiceMessage = {
+  tool_calls?: Array<{ function?: { arguments?: unknown } }>;
+  content?: unknown;
+};
+
+type OpenRouterResponseShape = {
+  choices?: Array<{ message?: OpenRouterChoiceMessage }>;
+};
+
 const requestSchema = z
   .object({
     image: z.string().min(16),
@@ -63,6 +72,58 @@ function jsonResponse(body: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function extractProviderErrorMessage(rawBody: string) {
+  if (!rawBody.trim()) return null;
+  try {
+    const parsed = JSON.parse(rawBody);
+    const nestedMessage = parsed?.error?.message;
+    if (typeof nestedMessage === "string" && nestedMessage.trim()) {
+      return nestedMessage.trim();
+    }
+    if (typeof parsed?.error === "string" && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+    if (typeof parsed?.message === "string" && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+  } catch {
+    // Ignore parse failure and fall back to raw text.
+  }
+  return rawBody.trim().slice(0, 300);
+}
+
+function isDataPolicyBlockingError(message: string | null) {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return normalized.includes("no endpoints found matching your data policy");
+}
+
+function stripCodeFences(input: string) {
+  const trimmed = input.trim();
+  const match = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return match ? match[1] : trimmed;
+}
+
+function parseJsonString(input: string): unknown {
+  return JSON.parse(stripCodeFences(input));
+}
+
+function extractMessageText(messageContent: unknown) {
+  if (typeof messageContent === "string") return messageContent;
+  if (!Array.isArray(messageContent)) return null;
+  const combined = messageContent
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+        return (part as { text: string }).text;
+      }
+      return "";
+    })
+    .join("\n")
+    .trim();
+  return combined || null;
 }
 
 function decodeBase64Url(input: string) {
@@ -369,15 +430,44 @@ serve(async (req) => {
       }),
     });
 
+    const responseBodyText = await response.text();
+
     if (!response.ok) {
-      const text = await response.text();
+      const providerMessage = extractProviderErrorMessage(responseBodyText);
+
+      if (isDataPolicyBlockingError(providerMessage)) {
+        await logErrorEvent({
+          source: "edge.analyze-food",
+          level: "warning",
+          message: "OpenRouter blocked request due to account data policy",
+          context: {
+            status: response.status,
+            model: OPENROUTER_MODEL,
+            providerMessage,
+          },
+          userId,
+        });
+
+        return jsonResponse(
+          {
+            error:
+              "AI request blocked by OpenRouter data policy. Allow compatible providers in OpenRouter Privacy settings or use a paid model compatible with your policy.",
+            code: "provider_data_policy_blocked",
+            settingsUrl: "https://openrouter.ai/settings/privacy",
+          },
+          502,
+        );
+      }
+
       await logErrorEvent({
         source: "edge.analyze-food",
         level: "error",
         message: "OpenRouter request failed",
         context: {
           status: response.status,
-          response: text.slice(0, 1200),
+          model: OPENROUTER_MODEL,
+          response: responseBodyText.slice(0, 1200),
+          providerMessage,
         },
         userId,
       });
@@ -397,28 +487,86 @@ serve(async (req) => {
       if (response.status === 401 || response.status === 403) {
         return jsonResponse({ error: "Invalid or unauthorized OpenRouter API key." }, 502);
       }
-      return jsonResponse({ error: "AI analysis failed" }, 500);
+      if (response.status >= 400 && response.status < 500) {
+        return jsonResponse(
+          {
+            error: providerMessage || "AI provider rejected this request for the selected model.",
+            code: "provider_request_invalid",
+          },
+          502,
+        );
+      }
+      return jsonResponse({ error: "AI analysis failed", code: "provider_request_failed" }, 502);
     }
 
-    const data = await response.json();
-    const toolCall = data?.choices?.[0]?.message?.tool_calls?.[0];
-
-    if (!toolCall) {
-      return jsonResponse({ items: [] });
-    }
-
-    let aiArguments: unknown;
+    let data: unknown;
     try {
-      aiArguments = JSON.parse(toolCall.function.arguments);
+      data = parseJsonString(responseBodyText);
     } catch {
       await logErrorEvent({
         source: "edge.analyze-food",
-        level: "warning",
-        message: "AI returned non-JSON tool arguments",
-        context: { toolCall },
+        level: "error",
+        message: "AI provider returned non-JSON success payload",
+        context: {
+          model: OPENROUTER_MODEL,
+          response: responseBodyText.slice(0, 1200),
+        },
         userId,
       });
-      return jsonResponse({ error: "Invalid AI output format." }, 502);
+      return jsonResponse({ error: "AI provider returned an invalid response format." }, 502);
+    }
+
+    const aiResponse = data as OpenRouterResponseShape;
+    const message = aiResponse.choices?.[0]?.message;
+    const toolCall = message?.tool_calls?.[0];
+
+    let aiArguments: unknown;
+
+    if (toolCall) {
+      const rawToolArguments = toolCall?.function?.arguments;
+      if (typeof rawToolArguments === "string") {
+        try {
+          aiArguments = parseJsonString(rawToolArguments);
+        } catch {
+          await logErrorEvent({
+            source: "edge.analyze-food",
+            level: "warning",
+            message: "AI returned non-JSON tool arguments",
+            context: { toolCall },
+            userId,
+          });
+          return jsonResponse({ error: "Invalid AI output format." }, 502);
+        }
+      } else if (rawToolArguments && typeof rawToolArguments === "object") {
+        aiArguments = rawToolArguments;
+      } else {
+        await logErrorEvent({
+          source: "edge.analyze-food",
+          level: "warning",
+          message: "AI tool call missing arguments",
+          context: { toolCall },
+          userId,
+        });
+        return jsonResponse({ error: "Invalid AI output format." }, 502);
+      }
+    } else {
+      const contentText = extractMessageText(message?.content);
+      if (!contentText) {
+        return jsonResponse({ items: [] });
+      }
+
+      try {
+        aiArguments = parseJsonString(contentText);
+      } catch {
+        await logErrorEvent({
+          source: "edge.analyze-food",
+          level: "warning",
+          message: "AI returned text content without parseable JSON",
+          context: { contentPreview: contentText.slice(0, 500) },
+          userId,
+        });
+        return jsonResponse({ items: [] });
+      }
     }
 
     const validatedOutput = aiResponseSchema.safeParse(aiArguments);

@@ -6,7 +6,13 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { AuthProvider } from "@/providers/AuthProvider";
 import { QueryProvider } from "@/providers/QueryProvider";
 import { supabaseConfigError } from "@/lib/supabase";
+import { useOfflineMealQueueSync } from "@/hooks/useOfflineMealQueue";
 import { colors, radius } from "@/theme/tokens";
+
+function OfflineQueueSyncBridge() {
+  useOfflineMealQueueSync();
+  return null;
+}
 
 export default function RootLayout() {
   if (supabaseConfigError) {
@@ -32,6 +38,7 @@ export default function RootLayout() {
   return (
     <QueryProvider>
       <AuthProvider>
+        <OfflineQueueSyncBridge />
         <StatusBar style="dark" />
         <Stack screenOptions={{ headerShown: false }} />
       </AuthProvider>
