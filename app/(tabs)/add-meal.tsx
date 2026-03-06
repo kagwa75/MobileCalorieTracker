@@ -29,11 +29,13 @@ import {
 import { enqueueOfflineMealLog, isLikelyOfflineError } from "@/hooks/useOfflineMealQueue";
 import { useCreateMeal, useMealsByDate } from "@/hooks/useMeals";
 import { useProfile } from "@/hooks/useProfile";
+import { useAds } from "@/providers/AdsProvider";
 import type { AnalyzeFoodResponse, MealItem, MealType } from "@/shared/schemas";
 import { analyzeFoodResponseSchema } from "@/shared/schemas";
 import { AppScreen } from "@/components/layout/AppScreen";
 import { AppCard } from "@/components/ui/AppCard";
 import { AppButton } from "@/components/ui/AppButton";
+import { AdBanner } from "@/components/ads/AdBanner";
 import { colors, radius } from "@/theme/tokens";
 
 const mealTypes: MealType[] = ["breakfast", "lunch", "dinner", "snack"];
@@ -65,6 +67,7 @@ export default function AddMealScreen() {
   const { type } = useLocalSearchParams<{ type?: string }>();
   const createMeal = useCreateMeal();
   const { data: profile } = useProfile();
+  const { maybeShowInterstitial } = useAds();
   const todayKey = formatDateKey(new Date());
   const { data: todayMeals = [] } = useMealsByDate(todayKey);
   const { data: recentFoods = [] } = useRecentFoods(8);
@@ -381,6 +384,7 @@ export default function AddMealScreen() {
       }
 
       setItems((previous) => [...previous, ...responseData.items]);
+      await maybeShowInterstitial("analysis_completed");
       Alert.alert("Food detected", `Found ${responseData.items.length} item(s). Review and save.`);
     } catch (error) {
       void captureClientError(error, { screen: "add-meal", phase: "analyze-food" });
@@ -447,14 +451,15 @@ export default function AddMealScreen() {
       const dailyGoal = profile?.daily_calorie_goal ?? 2000;
       const nextCalories = currentCalories + totalCalories;
       const targetStatus = handleCalorieTarget(currentCalories, nextCalories, dailyGoal);
+      let message = "Your meal has been logged.";
 
       if (targetStatus === "just_met") {
-        Alert.alert("Meal saved", "Your meal has been logged. Target reached for today.");
+        message = "Your meal has been logged. Target reached for today.";
       } else if (targetStatus === "over") {
-        Alert.alert("Meal saved", `Your meal has been logged. You are ${Math.round(nextCalories - dailyGoal)} kcal over today.`);
-      } else {
-        Alert.alert("Meal saved", "Your meal has been logged.");
+        message = `Your meal has been logged. You are ${Math.round(nextCalories - dailyGoal)} kcal over today.`;
       }
+
+      Alert.alert("Meal saved", message);
       router.replace("/(tabs)/dashboard");
     } catch (error) {
       void captureClientError(error, { screen: "add-meal", phase: "save" });
@@ -479,6 +484,7 @@ export default function AddMealScreen() {
   return (
     <AppScreen>
       <Text style={styles.title}>Add meal</Text>
+      <AdBanner />
 
       <AppCard style={{ marginBottom: 10 }}>
         <Text style={styles.sectionHeading}>Meal type</Text>

@@ -39,11 +39,25 @@
       ],
       "expo-secure-store",
       [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-7756166084305700~2592338158",
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511",
+          "delayAppMeasurementInit": true,
+          "userTrackingUsageDescription": "Your device identifier is used to provide relevant ads and improve ad performance."
+        }
+      ],[
         "expo-build-properties",
         {
           "android": {
-            "enableProguardInReleaseBuilds": true,
-            "enableShrinkResourcesInReleaseBuilds": true
+            "usesCleartextTraffic": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "enableMinifyInReleaseBuilds": true,
+            "enableBundleCompression": true,
+            "extraProguardRules": "-keep class com.google.android.gms.internal.consent_sdk.** { *; }",
+            "buildArchs": [
+              "arm64-v8a"
+            ]
           }
         }
       ]

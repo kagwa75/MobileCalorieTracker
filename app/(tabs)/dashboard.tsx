@@ -11,6 +11,7 @@ import { useSmartMealReminders } from "@/hooks/useReminders";
 import { useAdaptiveCalorieRecalculation } from "@/hooks/useWeights";
 import type { MealType } from "@/shared/schemas";
 import { AppScreen } from "@/components/layout/AppScreen";
+import { AdBanner } from "@/components/ads/AdBanner";
 import { AppCard } from "@/components/ui/AppCard";
 import { colors, radius } from "@/theme/tokens";
 
@@ -113,6 +114,7 @@ export default function DashboardScreen() {
           <Text style={styles.headerBadgeText}>Focus</Text>
         </View>
       </View>
+      <AdBanner />
 
       {loading ? (
         <View style={{ paddingVertical: 40, alignItems: "center" }}>

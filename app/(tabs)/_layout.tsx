@@ -2,11 +2,13 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "@/providers/AuthProvider";
+import { useAds } from "@/providers/AdsProvider";
 import { isOnboardingComplete, useProfile } from "@/hooks/useProfile";
 import { colors, radius, shadow } from "@/theme/tokens";
 
 export default function TabsLayout() {
   const { user, loading } = useAuth();
+  const { maybeShowInterstitial } = useAds();
   const { data: profile, isLoading: profileLoading } = useProfile();
 
   if (loading || (user && profileLoading)) {
@@ -52,6 +54,12 @@ export default function TabsLayout() {
           }
 
           return <MaterialCommunityIcons name={iconName} size={iconSize} color={color} />;
+        }
+      })}
+      screenListeners={({ route }) => ({
+        tabPress: () => {
+          if (route.name === "add-meal") return;
+          void maybeShowInterstitial("tab_navigation");
         }
       })}
     >

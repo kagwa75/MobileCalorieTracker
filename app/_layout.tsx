@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { AuthProvider } from "@/providers/AuthProvider";
+import { AdsProvider } from "@/providers/AdsProvider";
 import { QueryProvider } from "@/providers/QueryProvider";
 import { supabaseConfigError } from "@/lib/supabase";
 import { useOfflineMealQueueSync } from "@/hooks/useOfflineMealQueue";
@@ -38,9 +39,11 @@ export default function RootLayout() {
   return (
     <QueryProvider>
       <AuthProvider>
-        <OfflineQueueSyncBridge />
-        <StatusBar style="dark" />
-        <Stack screenOptions={{ headerShown: false }} />
+        <AdsProvider>
+          <OfflineQueueSyncBridge />
+          <StatusBar style="dark" />
+          <Stack screenOptions={{ headerShown: false }} />
+        </AdsProvider>
       </AuthProvider>
     </QueryProvider>
   );

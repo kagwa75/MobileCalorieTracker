@@ -18,6 +18,8 @@ import { validateProfileWriteInput } from "@/lib/flowValidation";
 import { AppScreen } from "@/components/layout/AppScreen";
 import { AppButton } from "@/components/ui/AppButton";
 import { AppCard } from "@/components/ui/AppCard";
+import { AdBanner } from "@/components/ads/AdBanner";
+import { useAds } from "@/providers/AdsProvider";
 import { colors, radius } from "@/theme/tokens";
 
 export default function ProfileScreen() {
@@ -29,6 +31,7 @@ export default function ProfileScreen() {
   const upsertWeight = useUpsertWeightCheckin();
   const { data: reminderPrefs } = useReminderPreferences();
   const updateReminderPrefs = useUpdateReminderPreferences();
+  const { isSupported: adsSupported, isInitializing: adsInitializing, privacyOptionsRequired, showPrivacyOptions } = useAds();
 
   const [displayName, setDisplayName] = useState("");
   const [calorieGoal, setCalorieGoal] = useState("2000");
@@ -169,6 +172,17 @@ export default function ProfileScreen() {
     }
   };
 
+  const onManageAdPrivacy = async () => {
+    try {
+      const opened = await showPrivacyOptions();
+      if (opened) return;
+      Alert.alert("Ad privacy", "No ad privacy options are required for your region right now.");
+    } catch (error) {
+      void captureClientError(error, { screen: "profile", action: "manage-ad-privacy" });
+      Alert.alert("Ad privacy", "Could not open ad privacy options right now.");
+    }
+  };
+
   if (isLoading) {
     return (
       <AppScreen scroll={false}>
@@ -188,6 +202,7 @@ export default function ProfileScreen() {
           <Text style={styles.headerPillText}>Account</Text>
         </View>
       </View>
+      <AdBanner />
 
       <AppCard style={{ marginBottom: 10 }}>
         <Text style={styles.sectionTitle}>Account details</Text>
@@ -205,6 +220,18 @@ export default function ProfileScreen() {
           placeholderTextColor="#8ea0ba"
           style={styles.input}
         />
+        {adsSupported ? (
+          <>
+            <AppButton
+              label={adsInitializing ? "Loading ad privacy..." : "Manage ad privacy choices"}
+              onPress={() => void onManageAdPrivacy()}
+              disabled={adsInitializing}
+              variant="outline"
+              style={{ marginTop: 10 }}
+            />
+            {privacyOptionsRequired ? <Text style={styles.policyHint}>Required by your region's privacy rules.</Text> : null}
+          </>
+        ) : null}
       </AppCard>
 
       <AppCard style={{ marginBottom: 12 }}>
@@ -350,6 +377,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "800",
     marginBottom: 8
+  },
+  policyHint: {
+    marginTop: 8,
+    color: colors.mutedText,
+    fontSize: 12,
+    fontWeight: "500"
   },
   label: {
     color: colors.text,

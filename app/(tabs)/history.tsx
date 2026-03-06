@@ -18,6 +18,7 @@ import { useWeightCheckins } from "@/hooks/useWeights";
 import { captureClientError } from "@/lib/monitoring";
 import { AppScreen } from "@/components/layout/AppScreen";
 import { AppCard } from "@/components/ui/AppCard";
+import { AdBanner } from "@/components/ads/AdBanner";
 import { colors, radius } from "@/theme/tokens";
 
 export default function HistoryScreen() {
@@ -110,6 +111,7 @@ export default function HistoryScreen() {
   return (
     <AppScreen>
       <Text style={styles.title}>History</Text>
+      <AdBanner />
 
       <AppCard style={{ marginBottom: 10 }}>
         <View style={styles.dayNavRow}>
