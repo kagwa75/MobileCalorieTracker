@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { getBannerUnitId, isAdRuntimeSupported } from "@/lib/ads";
 import { useAds } from "@/providers/AdsProvider";
 import { useMonetization } from "@/hooks/useMonetization";
@@ -10,6 +10,8 @@ export function AdBanner() {
   const { canRequestAds, isInitializing: adsInitializing, requestNonPersonalizedAdsOnly, statusMessage } = useAds();
   const adsSupported = isAdRuntimeSupported();
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasFailed, setHasFailed] = useState(false);
 
   const adModule = useMemo(() => {
     if (!adsSupported) return null;
@@ -39,27 +41,57 @@ export function AdBanner() {
     );
   }
 
+  if (hasFailed && !__DEV__) {
+    return null;
+  }
+
   const unitId = getBannerUnitId(adModule.TestIds.BANNER);
 
   return (
-    <View style={{ marginTop: 10, alignItems: "center" }}>
-      <adModule.BannerAd
-        unitId={unitId}
-        size={adModule.BannerAdSize.MEDIUM_RECTANGLE}
-        requestOptions={{ requestNonPersonalizedAdsOnly }}
-        onAdLoaded={() => {
-          setLoadError(null);
-          if (__DEV__) console.log("[AdBanner] loaded");
-        }}
-        onAdFailedToLoad={(error) => {
-          const message = error?.message || "Unknown ad load error";
-          setLoadError(message);
-          console.warn("[AdBanner] failed to load:", message);
-        }}
-      />
+    <View style={[styles.wrap, !isLoaded && styles.wrapCollapsed]}>
+      <View style={!isLoaded ? styles.bannerHidden : undefined}>
+        <adModule.BannerAd
+          unitId={unitId}
+          size={adModule.BannerAdSize.MEDIUM_RECTANGLE}
+          requestOptions={{ requestNonPersonalizedAdsOnly }}
+          onAdLoaded={() => {
+            setLoadError(null);
+            setHasFailed(false);
+            setIsLoaded(true);
+            if (__DEV__) console.log("[AdBanner] loaded");
+          }}
+          onAdFailedToLoad={(error) => {
+            const message = error?.message || "Unknown ad load error";
+            setLoadError(message);
+            setIsLoaded(false);
+            setHasFailed(true);
+            console.warn("[AdBanner] failed to load:", message);
+          }}
+        />
+      </View>
       {__DEV__ && loadError ? (
-        <Text style={{ marginTop: 6, color: colors.mutedText, fontSize: 12 }}>Ad debug: {loadError}</Text>
+        <Text style={styles.debugText}>Ad debug: {loadError}</Text>
       ) : null}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  wrap: {
+    marginTop: 10,
+    alignItems: "center"
+  },
+  wrapCollapsed: {
+    marginTop: 0,
+    height: 0,
+    overflow: "hidden"
+  },
+  bannerHidden: {
+    opacity: 0
+  },
+  debugText: {
+    marginTop: 6,
+    color: colors.mutedText,
+    fontSize: 12
+  }
+});

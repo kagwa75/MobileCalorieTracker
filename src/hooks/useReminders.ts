@@ -4,6 +4,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { clampToQuietHours, fromMinutes, toMinutes } from "@/lib/nutritionInsights";
 import { useAuth } from "@/providers/AuthProvider";
 import type { MealType } from "@/shared/schemas";
+import { cacheQueryData, runResilientQuery } from "@/lib/resilientQuery";
 
 export type ReminderPreferences = {
   user_id: string;
@@ -35,38 +36,46 @@ const mealTypes: MealType[] = ["breakfast", "lunch", "dinner", "snack"];
 
 export function useReminderPreferences() {
   const { user } = useAuth();
+  const queryKey = ["reminder-preferences", user?.id] as const;
 
   return useQuery({
-    queryKey: ["reminder-preferences", user?.id],
+    queryKey,
     queryFn: async () => {
       if (!user) return null as ReminderPreferences | null;
+      return runResilientQuery({
+        queryKey,
+        mode: "cache-first",
+        maxAgeMs: 1000 * 60 * 10,
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("reminder_preferences")
+            .select("*")
+            .eq("user_id", user.id)
+            .maybeSingle();
 
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from("reminder_preferences")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
+          if (error) throw error;
 
-      if (error) throw error;
+          if (!data) {
+            const { data: created, error: createError } = await supabase
+              .from("reminder_preferences")
+              .insert({
+                user_id: user.id,
+                timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+              })
+              .select("*")
+              .single();
 
-      if (!data) {
-        const { data: created, error: createError } = await supabase
-          .from("reminder_preferences")
-          .insert({
-            user_id: user.id,
-            timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
-          })
-          .select("*")
-          .single();
+            if (createError) throw createError;
+            return created as ReminderPreferences;
+          }
 
-        if (createError) throw createError;
-        return created as ReminderPreferences;
-      }
-
-      return data as ReminderPreferences;
+          return data as ReminderPreferences;
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 10
   });
 }
 
@@ -94,7 +103,10 @@ export function useUpdateReminderPreferences() {
       if (error) throw error;
       return data as ReminderPreferences;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      const key = ["reminder-preferences", user?.id];
+      queryClient.setQueryData(key, data);
+      void cacheQueryData(key, data);
       void queryClient.invalidateQueries({ queryKey: ["reminder-preferences"] });
     }
   });
@@ -108,20 +120,27 @@ export function useSmartMealReminders() {
     queryKey: ["smart-reminders-history", user?.id],
     queryFn: async () => {
       if (!user) return [] as Array<{ meal_type: MealType; created_at: string }>;
+      const queryKey = ["smart-reminders-history", user.id];
+      return runResilientQuery({
+        queryKey,
+        mode: "network-first",
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("meals")
+            .select("meal_type, created_at")
+            .eq("user_id", user.id)
+            .gte("created_at", new Date(Date.now() - 1000 * 60 * 60 * 24 * 21).toISOString())
+            .order("created_at", { ascending: false })
+            .limit(400);
 
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from("meals")
-        .select("meal_type, created_at")
-        .eq("user_id", user.id)
-        .gte("created_at", new Date(Date.now() - 1000 * 60 * 60 * 24 * 21).toISOString())
-        .order("created_at", { ascending: false })
-        .limit(400);
-
-      if (error) throw error;
-      return (data ?? []) as Array<{ meal_type: MealType; created_at: string }>;
+          if (error) throw error;
+          return (data ?? []) as Array<{ meal_type: MealType; created_at: string }>;
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 10
   });
 
   const reminders = useMemo(() => {

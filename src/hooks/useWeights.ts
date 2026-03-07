@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/providers/AuthProvider";
 import { getSupabaseClient } from "@/lib/supabase";
+import { runResilientQuery } from "@/lib/resilientQuery";
 
 export type WeightCheckinRecord = {
   id: string;
@@ -23,25 +24,32 @@ export type AdaptiveRecalculationResult = {
 
 export function useWeightCheckins(startDate: string, endDate: string) {
   const { user } = useAuth();
+  const queryKey = ["weight-checkins", user?.id, startDate, endDate] as const;
 
   return useQuery({
-    queryKey: ["weight-checkins", user?.id, startDate, endDate],
+    queryKey,
     queryFn: async () => {
       if (!user) return [] as WeightCheckinRecord[];
+      return runResilientQuery({
+        queryKey,
+        mode: "network-first",
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("weight_checkins")
+            .select("*")
+            .eq("user_id", user.id)
+            .gte("date", startDate)
+            .lte("date", endDate)
+            .order("date", { ascending: true });
 
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from("weight_checkins")
-        .select("*")
-        .eq("user_id", user.id)
-        .gte("date", startDate)
-        .lte("date", endDate)
-        .order("date", { ascending: true });
-
-      if (error) throw error;
-      return (data ?? []) as WeightCheckinRecord[];
+          if (error) throw error;
+          return (data ?? []) as WeightCheckinRecord[];
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 5
   });
 }
 

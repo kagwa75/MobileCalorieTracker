@@ -4,6 +4,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { formatDateKey, startOfDay, subDays } from "@/lib/date";
 import { calculateCompleteDayStreakFromMeals } from "@/lib/nutritionInsights";
 import type { MealItem, MealType } from "@/shared/schemas";
+import { runResilientQuery } from "@/lib/resilientQuery";
 
 export type MealItemRecord = MealItem & {
   id: string;
@@ -37,46 +38,62 @@ export type MealRangeRecord = {
 
 export function useMealsByDate(date: string) {
   const { user } = useAuth();
+  const queryKey = ["meals", user?.id, date] as const;
 
   return useQuery({
-    queryKey: ["meals", user?.id, date],
+    queryKey,
     queryFn: async () => {
       if (!user) return [] as MealRecord[];
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from("meals")
-        .select("*, meal_items(*)")
-        .eq("user_id", user.id)
-        .eq("date", date)
-        .order("created_at", { ascending: true });
+      return runResilientQuery({
+        queryKey,
+        mode: "network-first",
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("meals")
+            .select("*, meal_items(*)")
+            .eq("user_id", user.id)
+            .eq("date", date)
+            .order("created_at", { ascending: true });
 
-      if (error) throw error;
-      return (data ?? []) as MealRecord[];
+          if (error) throw error;
+          return (data ?? []) as MealRecord[];
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 2
   });
 }
 
 export function useMealsByRange(startDate: string, endDate: string) {
   const { user } = useAuth();
+  const queryKey = ["meals-range", user?.id, startDate, endDate] as const;
 
   return useQuery({
-    queryKey: ["meals-range", user?.id, startDate, endDate],
+    queryKey,
     queryFn: async () => {
       if (!user) return [] as MealRangeRecord[];
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from("meals")
-        .select("id, date, meal_type, total_calories, total_protein, total_carbs, total_fat, created_at")
-        .eq("user_id", user.id)
-        .gte("date", startDate)
-        .lte("date", endDate)
-        .order("date", { ascending: true });
+      return runResilientQuery({
+        queryKey,
+        mode: "network-first",
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("meals")
+            .select("id, date, meal_type, total_calories, total_protein, total_carbs, total_fat, created_at")
+            .eq("user_id", user.id)
+            .gte("date", startDate)
+            .lte("date", endDate)
+            .order("date", { ascending: true });
 
-      if (error) throw error;
-      return (data ?? []) as MealRangeRecord[];
+          if (error) throw error;
+          return (data ?? []) as MealRangeRecord[];
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 3
   });
 }
 
@@ -84,35 +101,43 @@ export function useMealStreak() {
   const { user } = useAuth();
   const today = startOfDay(new Date());
   const todayStr = formatDateKey(today);
+  const queryKey = ["meal-streak", user?.id, todayStr] as const;
 
   return useQuery({
-    queryKey: ["meal-streak", user?.id, todayStr],
+    queryKey,
     queryFn: async () => {
       if (!user) return 0;
-      const supabase = getSupabaseClient();
+      return runResilientQuery({
+        queryKey,
+        mode: "network-first",
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
 
-      const earliestDate = formatDateKey(subDays(today, 120));
-      const { data, error } = await supabase
-        .from("meals")
-        .select("date")
-        .eq("user_id", user.id)
-        .gte("date", earliestDate)
-        .order("date", { ascending: false });
+          const earliestDate = formatDateKey(subDays(today, 120));
+          const { data, error } = await supabase
+            .from("meals")
+            .select("date")
+            .eq("user_id", user.id)
+            .gte("date", earliestDate)
+            .order("date", { ascending: false });
 
-      if (error) throw error;
+          if (error) throw error;
 
-      const loggedDays = new Set((data ?? []).map((meal) => meal.date));
-      let streak = 0;
-      let cursor = today;
+          const loggedDays = new Set((data ?? []).map((meal) => meal.date));
+          let streak = 0;
+          let cursor = today;
 
-      while (loggedDays.has(formatDateKey(cursor))) {
-        streak += 1;
-        cursor = subDays(cursor, 1);
-      }
+          while (loggedDays.has(formatDateKey(cursor))) {
+            streak += 1;
+            cursor = subDays(cursor, 1);
+          }
 
-      return streak;
+          return streak;
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 5
   });
 }
 
@@ -120,25 +145,33 @@ export function useCompleteDayStreak() {
   const { user } = useAuth();
   const today = startOfDay(new Date());
   const todayStr = formatDateKey(today);
+  const queryKey = ["complete-day-streak", user?.id, todayStr] as const;
 
   return useQuery({
-    queryKey: ["complete-day-streak", user?.id, todayStr],
+    queryKey,
     queryFn: async () => {
       if (!user) return 0;
-      const supabase = getSupabaseClient();
-      const earliestDate = formatDateKey(subDays(today, 180));
+      return runResilientQuery({
+        queryKey,
+        mode: "network-first",
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const earliestDate = formatDateKey(subDays(today, 180));
 
-      const { data, error } = await supabase
-        .from("meals")
-        .select("date, meal_type")
-        .eq("user_id", user.id)
-        .gte("date", earliestDate)
-        .order("date", { ascending: false });
+          const { data, error } = await supabase
+            .from("meals")
+            .select("date, meal_type")
+            .eq("user_id", user.id)
+            .gte("date", earliestDate)
+            .order("date", { ascending: false });
 
-      if (error) throw error;
-      return calculateCompleteDayStreakFromMeals((data ?? []) as Array<{ date: string; meal_type: MealType }>);
+          if (error) throw error;
+          return calculateCompleteDayStreakFromMeals((data ?? []) as Array<{ date: string; meal_type: MealType }>);
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 5
   });
 }
 

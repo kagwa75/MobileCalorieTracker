@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/providers/AuthProvider";
 import { getSupabaseClient } from "@/lib/supabase";
 import type { ActivityLevel, DietaryPreference, Gender, Goal, TargetPace } from "@/lib/calorieTarget";
+import { cacheQueryData, runResilientQuery } from "@/lib/resilientQuery";
 
 export type ProfileRecord = {
   id: string;
@@ -64,22 +65,31 @@ export function isOnboardingComplete(profile: ProfileRecord | null | undefined) 
 
 export function useProfile() {
   const { user } = useAuth();
+  const queryKey = ["profile", user?.id] as const;
 
   return useQuery({
-    queryKey: ["profile", user?.id],
+    queryKey,
     queryFn: async () => {
       if (!user) return null as ProfileRecord | null;
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      return runResilientQuery({
+        queryKey,
+        mode: "cache-first",
+        maxAgeMs: 1000 * 60 * 10,
+        queryFn: async () => {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("user_id", user.id)
+            .maybeSingle();
 
-      if (error) throw error;
-      return (data as ProfileRecord | null) ?? null;
+          if (error) throw error;
+          return (data as ProfileRecord | null) ?? null;
+        }
+      });
     },
-    enabled: !!user
+    enabled: !!user,
+    staleTime: 1000 * 60 * 10
   });
 }
 
@@ -106,7 +116,10 @@ export function useUpdateProfile() {
       if (error) throw error;
       return data as ProfileRecord;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      const key = ["profile", user?.id];
+      queryClient.setQueryData(key, data);
+      void cacheQueryData(key, data);
       void queryClient.invalidateQueries({ queryKey: ["profile"] });
     }
   });
@@ -168,7 +181,19 @@ export function useRecomputeProfileCalorieTarget() {
       const row = Array.isArray(data) ? data[0] : null;
       return (row as CalorieTargetRpcResult | null) ?? null;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      const key = ["profile", user?.id];
+      if (data) {
+        const current = queryClient.getQueryData<ProfileRecord | null>(key);
+        if (current) {
+          const merged: ProfileRecord = {
+            ...current,
+            daily_calorie_goal: data.daily_calories
+          };
+          queryClient.setQueryData(key, merged);
+          void cacheQueryData(key, merged);
+        }
+      }
       void queryClient.invalidateQueries({ queryKey: ["profile"] });
     }
   });

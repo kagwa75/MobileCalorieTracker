@@ -1,21 +1,31 @@
 import type { ReactNode } from "react";
-import { ScrollView, StyleSheet, View } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@/theme/tokens";
 
 type AppScreenProps = {
   children: ReactNode;
   scroll?: boolean;
+  refreshing?: boolean;
+  onRefresh?: (() => void) | null;
 };
 
-export function AppScreen({ children, scroll = true }: AppScreenProps) {
+export function AppScreen({ children, scroll = true, refreshing = false, onRefresh = null }: AppScreenProps) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.decorTop} pointerEvents="none" />
       <View style={styles.decorBottom} pointerEvents="none" />
 
       {scroll ? (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            onRefresh
+              ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+              : undefined
+          }
+        >
           {children}
         </ScrollView>
       ) : (

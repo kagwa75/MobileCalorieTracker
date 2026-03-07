@@ -6,8 +6,9 @@ import { captureClientError } from "@/lib/monitoring";
 type GoogleMobileAdsModule = typeof import("react-native-google-mobile-ads");
 
 const INTERSTITIAL_FREQUENCY_KEY = "@calorie-tracker/interstitial-frequency-v1";
-const INTERSTITIAL_COOLDOWN_MS = 8 * 60 * 1000;
-const INTERSTITIAL_DAILY_CAP = 4;
+// Launch tuning: increase opportunities while keeping policy-safe throttling.
+const INTERSTITIAL_COOLDOWN_MS = 4 * 60 * 1000;
+const INTERSTITIAL_DAILY_CAP = 6;
 
 type InterstitialFrequencyState = {
   dateKey: string;

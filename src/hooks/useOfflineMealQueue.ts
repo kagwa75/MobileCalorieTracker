@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { MealItem, MealType } from "@/shared/schemas";
 import { useCreateMeal } from "@/hooks/useMeals";
@@ -82,6 +83,10 @@ export function useOfflineMealQueueSync() {
 
     try {
       const queue = await readQueue();
+      if (!queue.length) {
+        setPendingCount(0);
+        return;
+      }
       const remaining: QueuedMealLog[] = [];
 
       for (const entry of queue) {
@@ -116,6 +121,23 @@ export function useOfflineMealQueueSync() {
   useEffect(() => {
     if (!user) return;
     void syncNow();
+  }, [syncNow, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const interval = setInterval(() => {
+      void syncNow();
+    }, 45_000);
+
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void syncNow();
+    });
+
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
   }, [syncNow, user]);
 
   return {
